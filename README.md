@@ -16,10 +16,8 @@ works.rscfox.com 成果管理系统操作 Skill，支持批量上传证书 PDF +
 ## 安装
 
 ```
-请帮我 git clone https://github.com/YOUR_USERNAME/rscfox-com-operations.git ~/.workbuddy/skills/rscfox-com-operations/
+请帮我 git clone https://github.com/nwgale/rscfox-com-operations.git ~/.workbuddy/skills/rscfox-com-operations/
 ```
-
-把 `YOUR_USERNAME` 换成实际的 GitHub 用户名。
 
 ## 使用
 
