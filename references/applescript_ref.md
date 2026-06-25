@@ -1,12 +1,28 @@
 # Chrome AppleScript Interface Reference
 
-## Core Pattern: Execute JavaScript in Chrome
+## Core Pattern: Execute JavaScript in a Dedicated Chrome Window
+
+This skill never uses `front window` or iterates all windows by URL. Instead, it creates a dedicated automation window and targets it by window ID:
 
 ```applescript
 tell application "Google Chrome"
-  execute active tab of front window javascript "<js-code>"
+	try
+		set wId to (do shell script "cat /tmp/chrome_auto_win_id.txt 2>/dev/null") as integer
+		set w to window id wId
+	on error
+		return "ERROR: Automation window not found. Run init first."
+	end try
+	execute active tab of w javascript "<js-code>"
 end tell
 ```
+
+Create/reset the dedicated window with:
+
+```bash
+osascript scripts/chrome_auto_init.scpt [optionalURL]
+```
+
+**Why dedicated window?** Chrome shares cookies across windows of the same profile, so the new window inherits login state. At the same time, the automation never steals focus or interferes with the user's other Chrome windows.
 
 **Important constraints:**
 
@@ -16,8 +32,15 @@ end tell
 
 ```applescript
 set jsScript to do shell script "cat /tmp/chrome_exec_js.js"
+
 tell application "Google Chrome"
-  execute active tab of front window javascript jsScript
+	try
+		set wId to (do shell script "cat /tmp/chrome_auto_win_id.txt 2>/dev/null") as integer
+		set w to window id wId
+	on error
+		return "ERROR: Automation window not found. Run init first."
+	end try
+	execute active tab of w javascript jsScript
 end tell
 ```
 
@@ -27,18 +50,20 @@ end tell
 
 ## Page Navigation
 
+All navigation happens inside the dedicated automation window (`w`):
+
 ```applescript
 -- Get current URL
-tell application "Google Chrome" to get URL of active tab of front window
+tell application "Google Chrome" to get URL of active tab of w
 
 -- Navigate to URL
-tell application "Google Chrome" to set URL of active tab of front window to "https://example.com"
+tell application "Google Chrome" to set URL of active tab of w to "https://works.rscfox.com/achievements"
 
 -- Get page title
-tell application "Google Chrome" to get title of active tab of front window
+tell application "Google Chrome" to get title of active tab of w
 
 -- Reload page
-tell application "Google Chrome" to tell active tab of front window to reload
+tell application "Google Chrome" to tell active tab of w to reload
 ```
 
 ## Common JS Patterns
@@ -133,7 +158,7 @@ Inline JS with mixed quotes causes `missing value` errors in AppleScript. Always
 
 1. Write JS to `/tmp/chrome_exec_js.js`
 2. Execute via: `set jsScript to do shell script "cat /tmp/chrome_exec_js.js"`
-3. `execute active tab of front window javascript jsScript`
+3. `execute active tab of w javascript jsScript` (where `w` is the dedicated window loaded from `/tmp/chrome_auto_win_id.txt`)
 
 The `cat` approach also handles 2.6MB+ JS files (inline would hit AppleScript string limits).
 

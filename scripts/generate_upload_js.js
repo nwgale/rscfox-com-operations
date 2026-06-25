@@ -60,3 +60,4 @@ fs.writeFileSync('/tmp/chrome_exec_js.js', js);
 console.log(`Generated upload JS (${js.length} bytes) → /tmp/chrome_exec_js.js`);
 console.log(`File: ${fileName} (${fileBuffer.length} bytes)`);
 console.log('Next: osascript scripts/exec_js.scpt');
+console.log('Note: make sure a dedicated window is initialized with "osascript scripts/chrome_auto_init.scpt" first.');

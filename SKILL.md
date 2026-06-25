@@ -1,22 +1,25 @@
 ---
 name: rscfox-com-operations
-description: "在 works.rscfox.com 成果管理系统中批量上传证书 PDF，利用站内 AI 识别自动回填字段。支持指导学生获奖、论文、著作、专利、著作权、个人获奖、纵向课题、横向课题等多种成果类型。包含断点续传、双层类别验证（侧边栏+弹窗下拉框）、A/B 双模式、随机过程表达输出等功能。通过 AppleScript 驱动已登录的 Chrome 浏览器执行页面操作。"
+description: "在 works.rscfox.com 成果管理系统中批量上传证书 PDF，利用站内 AI 识别自动回填字段。支持指导学生获奖、论文、著作、专利、著作权、个人获奖、纵向课题、横向课题等多种成果类型。包含断点续传、双层类别验证（侧边栏+弹窗下拉框）、A/B 双模式、随机过程表达输出、专用 Chrome 窗口隔离等功能。通过 AppleScript 驱动已登录的 Chrome 浏览器在独立窗口中执行页面操作，不影响用户正在使用的其它 Chrome 窗口。"
 agent_created: true
 ---
 
 # rscfox.com 成果上传操作技巧
 
-在已登录 works.rscfox.com 的 Chrome 浏览器中，通过 AppleScript 的 `execute javascript` 命令自动化页面操作。无需重启浏览器——保留 cookies、localStorage 和登录态。
+在已登录 works.rscfox.com 的 Chrome 浏览器中，通过 AppleScript 的 `execute javascript` 命令在**独立的 Chrome 窗口**中自动化页面操作。无需重启浏览器——新窗口保留 cookies、localStorage 和登录态，且绝不会抢占或操作用户正在使用的其它 Chrome 窗口。
 
 ## 快速开始
 
 ```bash
-# 1. 将 JS 写入临时文件
+# 1. 创建专用自动化窗口（首次或需要重置窗口时执行）
+osascript scripts/chrome_auto_init.scpt
+
+# 2. 将 JS 写入临时文件
 cat > /tmp/chrome_exec_js.js << 'JSEOF'
 (function(){ return JSON.stringify({title: document.title}); })()
 JSEOF
 
-# 2. 执行
+# 3. 在专用窗口中执行（不影响你正在用的其它 Chrome 窗口）
 osascript scripts/exec_js.scpt
 ```
 
@@ -235,39 +238,40 @@ AI 识别后，按 DOM 顺序读取 `input[placeholder]` 和 `textarea[placehold
 ## 文件上传（DataTransfer）
 
 ```bash
+# 1. 初始化专用窗口（如尚未创建）
+osascript scripts/chrome_auto_init.scpt
+
+# 2. 生成并执行上传 JS
 node scripts/generate_upload_js.js /path/to/file.pdf [input-selector]
 osascript scripts/exec_js.scpt
 ```
 
-读取文件、base64 编码、生成 JS 创建 Blob → File → DataTransfer，在文件 input 上触发 `change` 事件。默认选择器：`.paper-editor__file-input`。
+读取文件、base64 编码、生成 JS 创建 Blob → File → DataTransfer，在文件 input 上触发 `change` 事件。默认选择器：`.paper-editor__file-input`。`exec_js.scpt` 只在专用窗口中执行，不会干扰用户的其它 Chrome 窗口。
 
 ---
 
-## 多标签页定位
+## 专用窗口与页面导航
 
-当站点打开新标签页/弹窗时，标准 `exec_js.scpt` 只操作最前标签页。用以下模式按 URL 片段查找并执行 JS：
+`exec_js.scpt` 只操作由 `chrome_auto_init.scpt` 创建并记录的专用 Chrome 窗口（window id 写入 `/tmp/chrome_auto_win_id.txt`），不会触碰用户正在使用的其它 Chrome 窗口或标签页。
+
+如果需要在同一窗口内切换到不同页面，直接用 JavaScript 导航即可：
 
 ```bash
-cat > /tmp/chrome_target_tab.scpt << 'SCRIPT'
-set jsScript to do shell script "cat /tmp/chrome_exec_js.js"
+cat > /tmp/chrome_exec_js.js << 'JSEOF'
+(function(){
+  window.location.href = 'https://works.rscfox.com/achievements';
+  return JSON.stringify({navigating: true});
+})()
+JSEOF
 
-tell application "Google Chrome"
-	repeat with w in windows
-		repeat with t in tabs of w
-			if URL of t contains "TARGET_URL_FRAGMENT" then
-				set jsResult to execute t javascript jsScript
-				return jsResult
-			end if
-		end repeat
-	end repeat
-	return "Tab not found"
-end tell
-SCRIPT
-
-osascript /tmp/chrome_target_tab.scpt
+osascript scripts/exec_js.scpt
 ```
 
-**关键规则**：不要在 repeat 循环内设置 `active tab index` 或 `index of w`——AppleScript 会报 "-10006" 错误。直接在找到的 tab 引用上 `execute t javascript`。
+若 `exec_js.scpt` 返回 `ERROR: Automation window not found...`，说明专用窗口未初始化，先执行：
+
+```bash
+osascript scripts/chrome_auto_init.scpt [可选URL]
+```
 
 ---
 
@@ -289,7 +293,7 @@ osascript /tmp/chrome_target_tab.scpt
 2. 每文件：左侧栏切类别 → 新增成果 → 上传PDF → AI识别 → 检查字段 → 完成
 3. 上传前验证弹窗顶部下拉框类别是否正确
 4. 输出：仅开始/结束两条，随机 30% 插入过程表达
-5. 页面刷新或切标签页后自动恢复（多标签页定位）
+5. 使用专用 Chrome 窗口执行自动化，不影响用户正在使用的其它 Chrome 窗口
 6. 失败自动重试一次 AI 识别，仍失败则跳过继续
 
 如果目录下已有 .upload-progress.json，从第一个 pending 继续（断点续传）。
@@ -307,10 +311,11 @@ osascript /tmp/chrome_target_tab.scpt
 ### 同事准备工作
 
 1. 安装 skill：把整个 `rscfox-com-operations` 文件夹放入 `~/.workbuddy/skills/`
-2. Chrome 打开 `https://works.rscfox.com/achievements` 并登录
+2. Chrome 打开 `https://works.rscfox.com/achievements` 并登录（登录一次即可，新窗口会继承登录态）
 3. 证书 PDF 放在一个目录里（目录名随意）
 4. 粘贴话术到 WorkBuddy，开始上传
-5. 查看进度：终端运行 `tail -f /tmp/batch_upload_fast.log`
+5. 上传流程会自动创建专用 Chrome 窗口，不影响同事正在使用的其它 Chrome 窗口
+6. 查看进度：终端运行 `tail -f /tmp/batch_upload_fast.log`
 
 ---
 
@@ -327,7 +332,7 @@ osascript /tmp/chrome_target_tab.scpt
 
 1. 将 JS 写入 `/tmp/chrome_exec_js.js`
 2. 通过 `set jsScript to do shell script "cat /tmp/chrome_exec_js.js"` 执行
-3. `execute active tab of front window javascript jsScript`
+3. `execute active tab of w javascript jsScript`（`w` 为专用窗口）
 
 `cat` 方式也能处理 2.6MB+ 的 JS 文件（内联会触及 AppleScript 字符串上限）。
 
