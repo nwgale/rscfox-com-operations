@@ -51,7 +51,8 @@ osascript scripts/exec_js.scpt
 | 2 | 打开「新增成果」弹窗 | 弹窗可见 + 标题正确 + 弹窗内类别 == 期望类型 |
 | 3 | 上传文件 | 文件卡片数 >= 1 + 顶部 tab「全部页 N」== 卡片数 |
 | 4 | 点「AI 识别」 | 按钮退出 loading + 前 3 个 placeholder 字段至少 1 个非空 |
-| 5 | 点「完成」保存 | 弹窗消失 + 侧边栏「论文」计数 +1 |
+| 5a | 读基线 | 侧边栏对应类别计数 = N1 |
+| 5 | 点「完成」保存 | 弹窗消失 + 侧边栏计数 N2 == N1 + 1 |
 
 每一步都有「动作」和「校验」两类 JS，**全部已固化为 scripts/ 下的独立文件**，调用时直接 `osascript exec_js.scpt` 即可。
 
@@ -62,6 +63,7 @@ osascript scripts/exec_js.scpt
 | 2 | `step2_click.js` | `step2_verify.js` |
 | 3 | `generate_upload_js.js` + `exec_js.scpt` | `step3_verify.js` |
 | 4 | `step4_click.js` | `step4_verify.js`（轮询） |
+| 5a | （读基线） | `step5_baseline.js`（点「完成」之前） |
 | 5 | `step5_click.js` | `step5_verify.js` |
 
 每一步的「调用方式」与「判定标准」如下。
@@ -156,6 +158,20 @@ osascript scripts/exec_js.scpt
 - 按钮 disabled 已退出 + 字段满足 → 继续 Step 5
 - 超时 → 报告「AI 识别超时」并停止
 
+#### Step 5a — 读基线（在点「完成」之前）
+
+**目的**：保存侧边栏对应类别的当前计数 N1，作为「+1」的对照基准。
+
+**调用：**
+```bash
+sed "s|{CATEGORY_LABEL}|论文|g" scripts/step5_baseline.js > /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+```
+
+**判定**：
+- 返回 `categoryCount` 字段，记录为 N1
+- 如果 N1 == null（找不到该类别），说明 sidebar 状态异常，**中止**
+
 #### Step 5 — 点「完成」保存
 
 **动作（点击）：**
@@ -166,14 +182,18 @@ osascript scripts/exec_js.scpt
 
 **校验（等待 2 秒后执行）：**
 ```bash
-# 第一次：把期望类别注入到 step5_verify.js
 sed "s|{CATEGORY_LABEL}|论文|g" scripts/step5_verify.js > /tmp/chrome_exec_js.js
 osascript scripts/exec_js.scpt
 ```
 
-**判定**：
+**判定**（**双指标**同时满足）：
 - `hasVisibleEditor === false`（弹窗消失）
-- `paperCount` 比保存前 +1
+- `categoryCount` 字段（N2）== N1 + 1
+
+**若 N2 != N1 + 1**：
+- N2 > N1 + 1 → 可能保存时同时插入了多条，**异常**
+- N2 == N1 → 「完成」点击没生效（弹窗虽然消失但提交失败），**异常**
+- N2 < N1 → 异常，绝对不可能
 
 **注意**：`{CATEGORY_LABEL}` 必须替换为**用户上传的类别**（如「论文」/「个人获奖」/「指导学生获奖」），用于读侧边栏对应类别的计数。
 
@@ -265,10 +285,16 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   # 解析结果，若 buttonState.disabled=false 且 top3Fields 至少 1 个非空 → break
 done
 
-# Step 5
+# Step 5a — 读基线（点「完成」之前）
+sed "s|{CATEGORY_LABEL}|论文|g" scripts/step5_baseline.js > /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+# 记录返回值中的 categoryCount 字段为 N1
+
+# Step 5 — 点击完成 + 校验
 cp scripts/step5_click.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
 sleep 2
 sed "s|{CATEGORY_LABEL}|论文|g" scripts/step5_verify.js > /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+# 记录返回值中的 categoryCount 字段为 N2
+# 判定：N2 == N1 + 1 AND hasVisibleEditor == false
 ```
 
 ### 固化脚本清单
@@ -281,8 +307,9 @@ sed "s|{CATEGORY_LABEL}|论文|g" scripts/step5_verify.js > /tmp/chrome_exec_js.
 | `step3_verify.js` | 校验文件上传成功（attachment-card 数量） |
 | `step4_click.js` | 点击「AI 识别」按钮 |
 | `step4_verify.js` | 校验 AI 完成 + 字段填充 |
+| `step5_baseline.js` | 读基线：保存前侧边栏类别计数 N1（带 `{CATEGORY_LABEL}` 占位符） |
 | `step5_click.js` | 点击「完成」按钮 |
-| `step5_verify.js` | 校验保存结果（带 `{CATEGORY_LABEL}` 占位符） |
+| `step5_verify.js` | 校验保存结果 N2 == N1 + 1（带 `{CATEGORY_LABEL}` 占位符） |
 
 读取文件、base64 编码、生成 JS 创建 Blob → File → DataTransfer，在文件 input 上触发 `change` 事件。默认选择器：`.paper-editor__file-input`。`exec_js.scpt` 只在专用窗口中执行，不会干扰用户的其它 Chrome 窗口。
 
