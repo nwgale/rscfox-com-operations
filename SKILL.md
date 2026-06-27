@@ -226,19 +226,49 @@ JSON.stringify({
 
 ## 文件上传（DataTransfer）
 
-```bash
-# 1. 生成上传 JS
-node scripts/generate_upload_js.js /path/to/file.pdf [input-selector]
+### 原子性原则（务必严格遵守）
 
-# 2. 在专用窗口中执行
-osascript scripts/exec_js.scpt
+`/tmp/chrome_exec_js.js` 是 `exec_js.scpt` **唯一**读取的 JS 源文件。任何对它写操作的动作（生成器、echo、cat >）都会**覆盖**之前的全部内容。
+
+**一次上传 = 一次生成 + 立即执行，中间不修改**：
+
+```bash
+# ✅ 正确：用 && 串成原子操作
+node scripts/generate_upload_js.js /path/to/file.pdf && \
+  osascript scripts/exec_js.scpt
 ```
 
-**重要约束**：`generate_upload_js.js` 会**覆盖** `/tmp/chrome_exec_js.js`。因此：
-- 生成上传 JS → 立即执行 `exec_js.scpt` → 中间不要插入任何其他探查 JS
-- 执行完上传后，再修改 `/tmp/chrome_exec_js.js` 做其他探查
+```bash
+# ❌ 错误：生成之后、写探查 JS、再执行——执行的是探查 JS，不是上传
+node scripts/generate_upload_js.js /path/to/file.pdf
+cat > /tmp/chrome_exec_js.js << 'EOF'
+(function(){ /* 探查 JS */ })()
+EOF
+osascript scripts/exec_js.scpt   # ← 这里执行的是探查 JS！
+```
+
+**踩坑场景**：如果想在上传前先探查页面状态（确认弹窗已打开等），**先**写探查 JS、**再**写上传 JS：
+```bash
+cat > /tmp/chrome_exec_js.js << 'EOF'
+(function(){ /* 探查弹窗状态 */ })()
+EOF
+osascript scripts/exec_js.scpt       # 探查
+
+node scripts/generate_upload_js.js /path/to/file.pdf  # 生成
+osascript scripts/exec_js.scpt       # 上传（立即执行，不插入任何探查）
+```
+
+### 使用方法
+
+```bash
+# 上传单个文件
+node scripts/generate_upload_js.js /path/to/file.pdf [input-selector] && \
+  osascript scripts/exec_js.scpt
+```
 
 读取文件、base64 编码、生成 JS 创建 Blob → File → DataTransfer，在文件 input 上触发 `change` 事件。默认选择器：`.paper-editor__file-input`。`exec_js.scpt` 只在专用窗口中执行，不会干扰用户的其它 Chrome 窗口。
+
+**input-selector** 是可选项。默认 `.paper-editor__file-input` 适用于所有上传场景，无需修改。
 
 ---
 
