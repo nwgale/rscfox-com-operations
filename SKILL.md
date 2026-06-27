@@ -199,34 +199,94 @@ osascript scripts/exec_js.scpt
 
 ---
 
-## 批量上传（基于单条模式的循环）
+## 批量上传模式（新）
 
-> **旧版的 A/B 模式已废弃**，不再使用。批量上传 = 单条上传模式循环 N 次，每轮结束后回到 Step 1 开始下一轮。
+> **A/B 模式及任何旧的批量模式已全部废弃**。批量上传 = 单条上传模式循环 N 次，**外加 1 次重试 + 1 次浏览器刷新**。
 
-批量流程：
-1. 读取目录，生成进度文件 `.upload-progress.json`
-2. 对每个 `pending` 状态的文件，**按 Step 1–5 的顺序逐个执行**
-3. 每轮成功后，将进度文件中该文件状态置为 `done`
-4. 任意步骤硬校验失败 → 立即停止批量，报告当前文件失败
+### 适用场景
 
-### 进度文件格式
+用户给定一个目录，里面有 N 个 PDF/图片（论文/证书/专利等），需要把全部文件上传到 works.rscfox.com 的同一类别下。
+
+### 阶段 1：准备浏览器（一次性）
+
+执行专用 Chrome 窗口初始化（**避免和用户抢窗口**）：
+
+```bash
+osascript scripts/chrome_auto_init.scpt https://works.rscfox.com/achievements
+```
+
+- 创建一个独立 Chrome 窗口
+- 记录 window id 到 `/tmp/chrome_auto_win_id.txt`
+- 用户可以继续正常使用其他 Chrome 窗口，互不干扰
+
+### 阶段 2：扫描目录 + 生成进度（一次性）
+
+1. 扫描用户指定的目录，列出所有 `*.pdf`、`*.png`、`*.jpg`、`*.jpeg` 文件
+2. 按**文件名升序**排序（保证可预测的顺序）
+3. **在用户指定的目录内**生成 `.upload-progress.json`（不是上级目录）：
 
 ```json
 [
-  {"index": 1, "file": "xxx.pdf", "size": 12345, "status": "pending", "time": null, "result": null},
-  {"index": 2, "file": "yyy.pdf", "size": 23456, "status": "done",    "time": "2026-06-24T...", "result": {...}},
-  {"index": 3, "file": "zzz.pdf", "size": 34567, "status": "failed",  "time": "2026-06-24T...", "result": {"error": "AI识别超时"}}
+  {"index": 1, "file": "xxx.pdf", "size": 12345, "status": "pending", "time": null, "result": null, "retryCount": 0},
+  {"index": 2, "file": "yyy.pdf", "size": 23456, "status": "done",    "time": "2026-06-24T...", "result": {...}, "retryCount": 0},
+  {"index": 3, "file": "zzz.pdf", "size": 34567, "status": "failed",  "time": "2026-06-24T...", "result": {"error": "AI识别超时"}, "retryCount": 1}
 ]
 ```
 
-状态：`pending`（未处理）、`done`（已完成）、`failed`（单条模式任一步骤失败）。
+字段说明：
+- `status`：`pending`（未处理）/ `done`（成功）/ `failed`（失败，已重试 1 次）
+- `retryCount`：本文件已重试次数（0 或 1）
 
-### 关键差异：批量模式需要专用窗口
+**断点续传**：如果 `.upload-progress.json` 已存在，跳过 `done` 和 `failed` 状态，只处理 `pending` 的文件。
 
-- **单条模式**：可以直接在用户当前的 Chrome 窗口里执行（不强制专用窗口）
-- **批量模式**：必须使用 `chrome_auto_init.scpt` 创建专用窗口，避免执行 JS 时抢占用户焦点
+### 阶段 3：循环处理（每个文件）
+
+**对每个 `pending` 状态的文件，按「单条上传模式」跑一遍**：
+
+```
+Step 1   → 校验侧边栏激活类别；如果不是目标类别则点击切换
+Step 2   → 点击「+ 新增成果」+ 校验弹窗
+Step 3   → 上传文件 + 校验 attachment-card
+Step 4   → 点击「AI 识别」+ 轮询校验
+Step 5a  → 读基线 N1
+Step 5   → 点「完成」+ 校验 N2 == N1 + 1
+```
+
+**失败处理（重要）：**
+
+如果**任一硬校验失败**，**不要停止整个批量**。执行以下重试流程：
+
+```
+A. 刷新浏览器到 https://works.rscfox.com/achievements
+B. 重新执行完整的 Step 1 → 5a → 5
+C. 如果重试通过：
+   - 进度标 done
+   - 继续下一个文件
+D. 如果重试仍失败：
+   - 进度标 failed（retryCount = 1）
+   - 跳过该文件，继续下一个文件
+```
+
+**重试只一次**，不无限循环。
+
+**为什么先刷新浏览器？** 因为弹窗残留、Vue 状态错乱、网络瞬断等，都可以通过页面重载自愈。
+
+### 阶段 4：汇报
+
+批量跑完后，输出：
+
+```
+批量上传完成。
+- 总数: 20
+- done: 18
+- failed: 2
+- failed 文件列表:
+  - file_03.pdf (AI 识别超时)
+  - file_15.pdf (Step 5 N2 != N1 + 1)
+```
 
 ---
+
 
 ## 文件上传（DataTransfer）
 
@@ -369,11 +429,11 @@ osascript scripts/chrome_auto_init.scpt [可选URL]
   （可选值：指导学生获奖、论文、著作、专利、著作权、个人获奖、纵向课题、横向课题 等）
 
 要求：
-1. 生成进度文件 .upload-progress.json
-2. 每文件：严格按单条上传模式 Step 1–5 循环执行
-3. 每文件完成后更新进度：成功 → done，失败 → failed
-4. 任意文件失败 → 立即停止批量，报告失败文件
-5. 使用专用 Chrome 窗口执行自动化，不影响用户正在使用的其它 Chrome 窗口
+1. 阶段 1：执行 chrome_auto_init.scpt 创建专用 Chrome 窗口
+2. 阶段 2：在「证书目录」内生成 .upload-progress.json（注意：必须在目录内，不是上级）
+3. 阶段 3：对每个 pending 状态的文件，严格按单条上传模式 Step 1-5a-5 循环执行
+4. 失败处理：刷新浏览器到初始地址，重试 1 次；重试仍失败 → 标 failed，跳过该文件，继续下一个
+5. 阶段 4：跑完后汇报 done / failed 数 + failed 文件列表
 
 如果目录下已有 .upload-progress.json，从第一个 pending 继续（断点续传）。
 ```
