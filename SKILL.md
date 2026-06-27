@@ -53,7 +53,18 @@ osascript scripts/exec_js.scpt
 | 4 | 点「AI 识别」 | 按钮退出 loading + 前 3 个 placeholder 字段至少 1 个非空 |
 | 5 | 点「完成」保存 | 弹窗消失 + 侧边栏「论文」计数 +1 |
 
-每一步的 JS 与判定标准如下，**逐字使用**：
+每一步都有「动作」和「校验」两类 JS，**全部已固化为 scripts/ 下的独立文件**，调用时直接 `osascript exec_js.scpt` 即可。
+
+| 步骤 | 动作脚本 | 校验脚本 |
+|---|---|---|
+| 0 | （无） | （无） |
+| 1 | （手动点击） | `step1_verify.js` |
+| 2 | `step2_click.js` | `step2_verify.js` |
+| 3 | `generate_upload_js.js` + `exec_js.scpt` | `step3_verify.js` |
+| 4 | `step4_click.js` | `step4_verify.js`（轮询） |
+| 5 | `step5_click.js` | `step5_verify.js` |
+
+每一步的「调用方式」与「判定标准」如下。
 
 #### Step 0 — 准备工作
 - 调用时已确定文件路径和成果类型
@@ -63,64 +74,55 @@ osascript scripts/exec_js.scpt
 
 #### Step 1 — 切换类别
 
-**点击侧边栏目标类别。** 类别的 className 是 `workspace-side-item`。
+**手动或脚本点击侧边栏目标类别。** 类别的 className 是 `workspace-side-item`。
 
-**校验 JS：**
-```javascript
-JSON.stringify({
-  activeCategory: document.querySelector(".workspace-side-item.is-active .workspace-side-item__label").textContent.trim()
-})
+**调用：**
+```bash
+cp scripts/step1_verify.js /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
 ```
 
-**判定**：返回值 == 期望类型字符串。
+**判定**：返回的 `activeCategory` 字段 == 期望类型字符串。
 
 #### Step 2 — 打开「新增成果」弹窗
 
-**点击「+ 新增成果」按钮。**
-
-**校验 JS：**
-```javascript
-JSON.stringify({
-  hasVisibleEditor: (function(){
-    var d = document.querySelector(".el-dialog .paper-editor");
-    if (!d) return false;
-    var r = d.getBoundingClientRect();
-    return r.width > 0 && r.height > 0;
-  })(),
-  editorTitle: (function(){
-    var t = document.querySelector(".el-dialog .paper-editor .paper-editor__title");
-    return t ? t.textContent.trim() : null;
-  })(),
-  dialogCategory: (function(){
-    var s = document.querySelector(".el-dialog .paper-editor .paper-editor__achievement-select");
-    return s ? s.textContent.trim() : null;
-  })()
-})
+**动作（点击）：**
+```bash
+cp scripts/step2_click.js /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
 ```
 
-**判定**：
+**校验：**
+```bash
+cp scripts/step2_verify.js /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+```
+
+**判定**（三个字段同时满足才进入 Step 3）：
 - `hasVisibleEditor === true`
 - `editorTitle === "新增成果"`
 - `dialogCategory === 期望类型`
 
-三项必须同时满足。**任意一项不满足立即中止，不进入 Step 3**。
+**任意一项不满足立即中止，不进入 Step 3**。
 
 #### Step 3 — 上传文件
 
-**通过 DataTransfer 注入文件**（详见下文「文件上传」章节）。
+**动作（DataTransfer 注入 + 立即执行）：**
+```bash
+node scripts/generate_upload_js.js /path/to/file.pdf && \
+  osascript scripts/exec_js.scpt
+```
+
+**校验（等待 2–3 秒后执行）：**
+```bash
+cp scripts/step3_verify.js /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+```
 
 **注意**：
 - element-ui 的 `el-upload` 接收文件后会**主动清空** `input[type=file].files`，所以不能用 `files.length` 判断上传成功。
 - 该站使用的**真实**文件列表 className 是 `.paper-editor__attachment-card`（不是默认的 `.el-upload-list__item`）。
 - 每个 PDF 文件可能拆成多个 page-card（多页 PDF 就有多张卡片）。
-
-**校验 JS：**
-```javascript
-JSON.stringify({
-  attachmentCardCount: document.querySelectorAll(".el-dialog .paper-editor .paper-editor__attachment-card").length,
-  pageFilterText: (document.querySelector(".el-dialog .paper-editor .paper-editor__page-filter") || {}).textContent || null
-})
-```
 
 **判定**：
 - `attachmentCardCount >= 1`
@@ -130,23 +132,17 @@ JSON.stringify({
 
 #### Step 4 — 点「AI 识别」
 
-**轮询直到 AI 完成**。`paper-editor__recognize` 按钮在 AI 加载中会添加 `is-disabled` className 并设置 `disabled = true`。
+**动作（点击）：**
+```bash
+cp scripts/step4_click.js /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+```
 
-**校验 JS（在每轮轮询时执行）：**
-```javascript
-JSON.stringify({
-  buttonState: (function(){
-    var btn = document.querySelector(".el-dialog .paper-editor .paper-editor__recognize");
-    if (!btn) return null;
-    return {disabled: btn.disabled, className: btn.className};
-  })(),
-  top3Fields: (function(){
-    var fields = document.querySelectorAll(".el-dialog .paper-editor input[placeholder],textarea[placeholder]");
-    var arr = [];
-    for (var i=0;i<Math.min(3,fields.length);i++) arr.push({ph:fields[i].placeholder, val:fields[i].value});
-    return arr;
-  })()
-})
+**校验（轮询直到 AI 完成，最多 60 秒）：**
+```bash
+cp scripts/step4_verify.js /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+# 间隔 3 秒后再次执行，直到通过为止
 ```
 
 **判定**：
@@ -162,36 +158,24 @@ JSON.stringify({
 
 #### Step 5 — 点「完成」保存
 
-**点击「完成」按钮。**
+**动作（点击）：**
+```bash
+cp scripts/step5_click.js /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+```
 
-**校验 JS（点击完成后立即执行）：**
-```javascript
-JSON.stringify({
-  hasVisibleEditor: (function(){
-    var d = document.querySelector(".el-dialog .paper-editor");
-    if (!d) return false;
-    var r = d.getBoundingClientRect();
-    return r.width > 0 && r.height > 0;
-  })(),
-  paperCount: (function(){
-    var items = document.querySelectorAll(".workspace-side-item");
-    for (var i=0;i<items.length;i++){
-      var lbl = items[i].querySelector(".workspace-side-item__label");
-      if (lbl && lbl.textContent.trim() === "论文") {
-        var m = items[i].textContent.match(/(\d+)/);
-        return m ? parseInt(m[1]) : null;
-      }
-    }
-    return null;
-  })()
-})
+**校验（等待 2 秒后执行）：**
+```bash
+# 第一次：把期望类别注入到 step5_verify.js
+sed "s|{CATEGORY_LABEL}|论文|g" scripts/step5_verify.js > /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
 ```
 
 **判定**：
 - `hasVisibleEditor === false`（弹窗消失）
 - `paperCount` 比保存前 +1
 
-**注意**：`paperCount` 中的「论文」是硬编码。如果上传其他类别，请把「论文」替换为对应类别的中文名。
+**注意**：`{CATEGORY_LABEL}` 必须替换为**用户上传的类别**（如「论文」/「个人获奖」/「指导学生获奖」），用于读侧边栏对应类别的计数。
 
 ---
 
@@ -228,43 +212,77 @@ JSON.stringify({
 
 ### 原子性原则（务必严格遵守）
 
-`/tmp/chrome_exec_js.js` 是 `exec_js.scpt` **唯一**读取的 JS 源文件。任何对它写操作的动作（生成器、echo、cat >）都会**覆盖**之前的全部内容。
+`/tmp/chrome_exec_js.js` 是 `exec_js.scpt` **唯一**读取的 JS 源文件。任何对它写操作的动作（生成器、`cp`、`cat >`）都会**覆盖**之前的全部内容。
 
-**一次上传 = 一次生成 + 立即执行，中间不修改**：
+**正确的调用模式：固化 JS 文件 + `cp` 到 `/tmp/chrome_exec_js.js`**
+
+skill 已把每一步的 JS 固化为 `scripts/stepN_*.js` 文件。调用时**只复制文件，不修改内容**：
 
 ```bash
-# ✅ 正确：用 && 串成原子操作
+# ✅ 正确：直接复制固化文件，然后执行
+cp scripts/step1_verify.js /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+
+# ✅ 正确：上传文件用生成器，必须 && 串联
 node scripts/generate_upload_js.js /path/to/file.pdf && \
   osascript scripts/exec_js.scpt
-```
 
-```bash
-# ❌ 错误：生成之后、写探查 JS、再执行——执行的是探查 JS，不是上传
-node scripts/generate_upload_js.js /path/to/file.pdf
-cat > /tmp/chrome_exec_js.js << 'EOF'
-(function(){ /* 探查 JS */ })()
+# ✅ 正确：带变量的 JS（如 step5_verify 需注入类别名），用 sed
+sed "s|{CATEGORY_LABEL}|论文|g" scripts/step5_verify.js > /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+
+# ❌ 错误：用 cat > 写探查 JS，会覆盖之前的上传 JS
+cp scripts/step1_verify.js /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+cat > /tmp/chrome_exec_js.js << 'EOF'        # ← 这步会覆盖！
+(function(){ /* 探查 */ })()
 EOF
-osascript scripts/exec_js.scpt   # ← 这里执行的是探查 JS！
+osascript scripts/exec_js.scpt               # ← 执行的是探查，不是上传
 ```
 
-**踩坑场景**：如果想在上传前先探查页面状态（确认弹窗已打开等），**先**写探查 JS、**再**写上传 JS：
-```bash
-cat > /tmp/chrome_exec_js.js << 'EOF'
-(function(){ /* 探查弹窗状态 */ })()
-EOF
-osascript scripts/exec_js.scpt       # 探查
-
-node scripts/generate_upload_js.js /path/to/file.pdf  # 生成
-osascript scripts/exec_js.scpt       # 上传（立即执行，不插入任何探查）
-```
-
-### 使用方法
+### 单文件全流程模板
 
 ```bash
-# 上传单个文件
-node scripts/generate_upload_js.js /path/to/file.pdf [input-selector] && \
-  osascript scripts/exec_js.scpt
+# Step 1
+cp scripts/step1_verify.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+
+# Step 2
+cp scripts/step2_click.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+sleep 1
+cp scripts/step2_verify.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+
+# Step 3（上传 + 校验）
+node scripts/generate_upload_js.js /path/to/file.pdf && osascript scripts/exec_js.scpt
+sleep 3
+cp scripts/step3_verify.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+
+# Step 4
+cp scripts/step4_click.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+# 轮询 step4_verify
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  sleep 3
+  cp scripts/step4_verify.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+  # 解析结果，若 buttonState.disabled=false 且 top3Fields 至少 1 个非空 → break
+done
+
+# Step 5
+cp scripts/step5_click.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+sleep 2
+sed "s|{CATEGORY_LABEL}|论文|g" scripts/step5_verify.js > /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
 ```
+
+### 固化脚本清单
+
+| 文件 | 用途 |
+|---|---|
+| `step1_verify.js` | 读侧边栏激活类别 |
+| `step2_click.js` | 点击「+ 新增成果」按钮 |
+| `step2_verify.js` | 校验弹窗打开 + 弹窗内类别 |
+| `step3_verify.js` | 校验文件上传成功（attachment-card 数量） |
+| `step4_click.js` | 点击「AI 识别」按钮 |
+| `step4_verify.js` | 校验 AI 完成 + 字段填充 |
+| `step5_click.js` | 点击「完成」按钮 |
+| `step5_verify.js` | 校验保存结果（带 `{CATEGORY_LABEL}` 占位符） |
 
 读取文件、base64 编码、生成 JS 创建 Blob → File → DataTransfer，在文件 input 上触发 `change` 事件。默认选择器：`.paper-editor__file-input`。`exec_js.scpt` 只在专用窗口中执行，不会干扰用户的其它 Chrome 窗口。
 
