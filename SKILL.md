@@ -1,6 +1,6 @@
 ---
 name: rscfox-com-operations
-description: "在 works.rscfox.com 成果管理系统中批量上传证书 PDF，利用站内 AI 识别自动回填字段。支持指导学生获奖、论文、著作、专利、著作权、个人获奖、纵向课题、横向课题等多种成果类型。包含断点续传、双层类别验证（侧边栏+弹窗下拉框）、单条上传模式（带每步硬校验）、专用 Chrome 窗口隔离等功能。通过 AppleScript 驱动已登录的 Chrome 浏览器在独立窗口中执行页面操作，不影响用户正在使用的其它 Chrome 窗口。"
+description: "在 works.rscfox.com 成果管理系统中自动化操作。包含 4 个分能力：(1) 上传证书 PDF（单条/批量模式），利用站内 AI 识别自动回填字段；(2) 成果列表批量操作（导出 Excel / 导出附件 PDF / 批量修改 / 删除成果）；(3) 筛选器（PKU 北核等单项勾选 + 时间预设过去五年等）；(4) 任务中心下载（导出任务完成后手动点下载）。支持指导学生获奖、论文、著作、专利、著作权、个人获奖、纵向课题、横向课题等多种成果类型。包含断点续传、双层类别验证（侧边栏+弹窗下拉框）、单条上传模式（带每步硬校验）、专用 Chrome 窗口隔离等功能。通过 AppleScript 驱动已登录的 Chrome 浏览器在独立窗口中执行页面操作，不影响用户正在使用的其它 Chrome 窗口。所有 JS 已固化为 scripts/stepN_*.js、scripts/export_stepN_*.js、scripts/filter_stepN_*.js、scripts/task_center_*.js 文件，调用时直接 cp 即可。"
 agent_created: true
 ---
 
@@ -287,6 +287,274 @@ D. 如果重试仍失败：
 
 ---
 
+
+## 分能力 2：成果列表批量操作（导出 / 批量修改 / 删除）
+
+> 适用于「对已存在的成果做批量处理」。前置条件：先在「分能力 1」上传到列表，或在「分能力 3」筛选后再处理。
+
+### 适用场景
+
+| 能力 | 用途 | 二次确认 |
+|---|---|---|
+| 导出 Excel | 导出所选行的字段表格（论文名/刊物名/作者等） | 「确认导出」 |
+| 导出附件 PDF | 打包下载所选行的 PDF 附件 | 「确认导出」 |
+| 批量修改 | 一次修改所选行的多个字段 | 「确认修改」 |
+| 删除成果 | 删除所选行 | 「确认删除」 |
+
+### 通用入口：勾选 → 底部操作面板 → 触发按钮
+
+底部「**已选择 N 项成果**」操作面板**只在「简表」模式下出现**。引文模式没有这个面板。
+
+### 通用步骤（4 步）
+
+```
+Step 1   — 切到「简表」模式（如果还在引文模式）
+Step 2   — 勾选目标行（全选 or 前 N 行）
+Step 3   — 点击底部「导出 Excel / 导出附件 PDF / 批量修改 / 删除成果」之一
+Step 4   — 处理二次确认弹窗（确认导出 / 确认修改 / 确认删除）
+Step 5   — 等待下载（仅 Excel/PDF 导出）—— 通过 find ~/Downloads -newer /tmp/MAKEREF 找新文件
+```
+
+### 各步固化脚本
+
+| 步 | 文件 | 调用 | 期望返回 |
+|---|---|---|---|
+| 1 | `export_step1_simple_table.js` | `cp ... && osascript ...` | `active: "简表"` |
+| 2a | `export_step2_select_all.js` | `cp ... && osascript ...` | `newlyChecked: N >= 1` |
+| 2b | `export_step2_select_n.js` | `sed "s\|{N}\|5\|g" ... && osascript ...` | `newlyChecked: N` |
+| 2c | `export_step2_unselect.js` | `cp ... && osascript ...` | 全部取消 |
+| 3 | `export_step3_action.js` | `sed "s\|{ACTION}\|导出 Excel\|g" ... && osascript ...` | `clicked: true` |
+| 4 | `export_step4_confirm.js` | `sed "s\|{CONFIRM_TEXT}\|确认导出\|g" ... && osascript ...` | `clicked: true` |
+| 5 | `export_step5_wait_download.js` | 配合 `find ~/Downloads -newer ...` | （用户本机）文件路径 |
+
+**`{ACTION}` 可取值**：`导出 Excel` / `导出附件 PDF` / `批量修改` / `删除成果`
+
+**`{CONFIRM_TEXT}` 可取值**：
+- 对应导出 Excel / 导出附件 PDF / 批量修改 → `确认导出`
+- 对应删除成果 → `确认删除`
+
+### 完整调用样例：导出北核论文为 Excel
+
+```bash
+# 假设已经按分能力 3 筛选出 6 条北核
+# 阶段 A：切到简表
+cp scripts/export_step1_simple_table.js /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+
+# 阶段 B：勾选所有 6 行
+cp scripts/export_step2_select_all.js /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+
+# 阶段 C：点「导出 Excel」
+sed "s|{ACTION}|导出 Excel|g" scripts/export_step3_action.js > /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+
+# 阶段 D：点「确认导出」
+sed "s|{CONFIRM_TEXT}|确认导出|g" scripts/export_step4_confirm.js > /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+
+# 阶段 E：等待下载，标记开始时间
+touch /tmp/MAKEREF
+sleep 8
+find ~/Downloads -name "*.xlsx" -newer /tmp/MAKEREF
+```
+
+### 完整调用样例：删除若干条记录
+
+```bash
+# 勾选要删除的行
+cp scripts/export_step2_select_n.js /tmp/chrome_exec_js.js
+sed -i '' "s|{N}|3|g" /tmp/chrome_exec_js.js    # macOS sed
+osascript scripts/exec_js.scpt
+
+# 点「删除成果」
+sed "s|{ACTION}|删除成果|g" scripts/export_step3_action.js > /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+
+# 点「确认删除」
+sed "s|{CONFIRM_TEXT}|确认删除|g" scripts/export_step4_confirm.js > /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+```
+
+### 关键陷阱
+
+1. **「简表」模式必填**：如果当前是「引文」模式，操作面板不出现，按钮点不到。先切模式再勾选。
+2. **切换模式会清空已勾选**：从「引文」切到「简表」后，之前勾选的状态会重置。**先切模式，再勾选**。
+3. **`{ACTION}` 文本含空格**：sed 替换时用 `|` 而不是 `/` 作分隔符（已在脚本里这样写）。
+4. **「确认导出」vs「确认删除」**：四个操作对应的确认按钮文本不同（删除时是「确认删除」），不能写死。
+
+---
+
+## 分能力 3：筛选器（批量操作的可选前置）
+
+> 当 4 个批量操作能力需要「先过滤再处理」时使用。本身不独立使用，必须与分能力 2 串联。
+
+### 适用场景
+
+- 导出「**北核**」论文（筛选 `PKU(北大中文核心)`）
+- 导出某月上传的论文（筛选「时间」）
+- 删除某类别的所有记录（切到该类别 + 配合批量删除）
+- 批量修改某语言/某排名的记录
+
+### 筛选步骤
+
+```
+Step 1   — 打开顶部「更多筛选」弹窗
+Step 2   — 在弹窗里勾选条件项（如「PKU(北大中文核心)」）
+Step 3   — 点弹窗里的「确定」按钮
+Step 4   — 切到「简表」模式（必填，否则操作面板不出现）
+Verify   — 校验可见行数符合预期
+```
+
+### 各步固化脚本
+
+#### 3a：打开更多筛选 + 勾选项
+
+| 文件 | 调用 | 期望返回 |
+|---|---|---|
+| `filter_step1_open.js` | `cp ... && osascript ...` | `opened: true` |
+| `filter_step2_check.js` | `sed "s\|{LABEL}\|PKU(北大中文核心)\|g" ... && osascript ...` | `checked: true` |
+| `filter_more_confirm.js` | `cp ... && osascript ...` | `clicked: true` |
+| `filter_step_verify.js` | `cp ... && osascript ...` | `visibleRows >= 0` |
+
+#### 3b（可选）：时间筛选
+
+| 文件 | 调用 | 期望返回 |
+|---|---|---|
+| `filter_clear.js` | `cp ... && osascript ...` | `clicked: true`（清空旧筛选） |
+| `filter_time_open.js` | `cp ... && osascript ...` | `opened: true` |
+| `filter_time_pick_preset.js` | `sed "s\|{PRESET_LABEL}\|过去五年\|g" ... && osascript ...` | `clicked: true` |
+| `filter_time_confirm.js` | `cp ... && osascript ...` | `clicked: true` |
+
+**重要**：「过去五年」preset **不直接生效**，必须 `pick_preset → confirm` 两步都做。
+
+#### 3c（导出后）：任务中心下载
+
+| 文件 | 调用 | 期望返回 |
+|---|---|---|
+| `task_center_download.js` | `cp ... && osascript ...` | `clicked: true` |
+
+**重要**：导出任务完成（100%）后**不会自动下载**，必须在 `/task-center` 手动点「下载」。
+
+### 完整调用样例：导出近5年北核论文
+
+```bash
+# 阶段 A：确保在「论文」类别
+cp scripts/step1_verify.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+
+# 阶段 B：清空旧筛选（防止遗留）
+cp scripts/filter_clear.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+
+# 阶段 C：时间筛选 = 近5年
+cp scripts/filter_time_open.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+sleep 0.5
+sed "s|{PRESET_LABEL}|过去五年|g" scripts/filter_time_pick_preset.js > /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+sleep 0.5
+cp scripts/filter_time_confirm.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+
+# 阶段 D：更多筛选 = 北核
+cp scripts/filter_step1_open.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+sleep 0.5
+sed "s|{LABEL}|PKU(北大中文核心)|g" scripts/filter_step2_check.js > /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+sleep 0.5
+cp scripts/filter_more_confirm.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+
+# 阶段 E：校验结果（应该 ~4 条北核）
+cp scripts/filter_step_verify.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+
+# 阶段 F：切到简表
+cp scripts/filter_step4_simple_table.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+sleep 0.5
+
+# 阶段 G：勾选所有 + 导出
+cp scripts/export_step2_select_all.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+sed "s|{ACTION}|导出Excel|g" scripts/export_step3_action.js > /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+sleep 1
+sed "s|{CONFIRM_TEXT}|确认导出|g" scripts/export_step4_confirm.js > /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+
+# 阶段 H：等待跳转任务中心（页面会跳到 /task-center）
+sleep 3
+
+# 阶段 I：点下载按钮
+cp scripts/task_center_download.js /tmp/chrome_exec_js.js && osascript scripts/exec_js.scpt
+
+# 阶段 J：等下载完成
+sleep 5 && find ~/Downloads -name "*.xlsx" -newer /tmp/MAKEREF
+```
+
+### 已知可筛选项（已实测）
+
+| 标签 | 含义 |
+|---|---|
+| `PKU(北大中文核心)` | 北大中文核心（北核） |
+| `CSCD` | 中国科学引文数据库 |
+| `CSSCI` | 中文社会科学引文索引 |
+| `SCI` | 科学引文索引（英文） |
+| `EI` | 工程索引（英文） |
+| `SCD` | 科学引文数据库（中文） |
+
+复合值如 `CSSCIPKU` 表示同时被多个数据库收录，**筛选时只能按单项勾选**。
+
+### 关键陷阱
+
+1. **勾 checkbox 后必须点「确定」**：单纯勾选不会应用筛选。
+2. **`{LABEL}` 文本含括号**：sed 替换时用 `|` 作分隔符（已在脚本里这样写）。
+3. **筛选后必须切「简表」**：否则即使有结果，操作面板不出现。
+4. **切模式会清空已勾选**：如果在「简表」下做了行勾选，再切回「引文」再切回来，勾选状态丢失。
+
+---
+
+## 分能力 4：任务中心下载（导出后的取文件环节）
+
+> 当分能力 2 触发「导出 Excel / 导出附件 PDF / 批量修改」后，**网站会自动跳转到 `/task-center`**，并把任务放进任务中心。任务完成后**不会自动下载**，必须手动点。
+
+### 适用场景
+
+- 导出 Excel 后取 xlsx 文件
+- 导出附件 PDF 后取 zip/pdf 包
+- 重试/重下之前下载失败的文件
+
+### 流程
+
+```
+Step 1   — 确认在 /task-center 路由（点击「确认导出」后会自动跳转）
+Step 2   — 找第一条状态 = 已完成 的任务
+Step 3   — 点该行的「下载」按钮
+Step 4   — 等待浏览器自动开始下载，文件落到 ~/Downloads
+```
+
+### 固化脚本
+
+| 文件 | 调用 | 期望返回 |
+|---|---|---|
+| `task_center_download.js` | `cp ... && osascript ...` | `clicked: true` |
+
+### 完整调用样例
+
+```bash
+# 已经在 /task-center（前面点过「确认导出」会自动跳过来）
+# 直接点第一条已完成任务的下载按钮
+cp scripts/task_center_download.js /tmp/chrome_exec_js.js
+osascript scripts/exec_js.scpt
+
+# 等下载完成
+touch /tmp/MAKEREF
+sleep 5
+find ~/Downloads -name "*.xlsx" -newer /tmp/MAKEREF
+```
+
+### 关键陷阱
+
+1. **不会自动下载**：不要以为点了「确认导出」就完事了。**必须再到任务中心点下载**。
+2. **任务可能排队**：大批量导出可能显示「排队中 / 处理中」，需要刷新页面等待状态变为「已完成 100%」。
+3. **任务行 className 是 `.task-center-row`**（不是默认的 `.el-table__row`），任务中心的表格是自建组件。
+4. **下载是浏览器默认行为**：点了下载按钮后浏览器自动开始，文件落到 `~/Downloads`，文件名是 `papers-export-YYYYMMDD-HHMMSS.xlsx`。
+
+---
 
 ## 文件上传（DataTransfer）
 
